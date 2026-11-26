@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Check sources
+        run: |
+          python -m pip install --only-binary=:all: --require-hashes -r ci/lint-requirements.txt
+          make check PYTHON=python
+
+      - name: Set up the SDK with the checked-out action
+        id: setup
+        uses: ./
+        with:
+          packages: platform-tools
+
+      - name: Verify setup and incremental package installation
+        env:
+          CMDLINE_TOOLS_VERSION: ${{ steps.setup.outputs.ANDROID_COMMANDLINE_TOOLS_VERSION }}
+        run: |
+          test "$ANDROID_SDK_ROOT" = "$ANDROID_HOME"
+          [[ "$ANDROID_HOME" == "$RUNNER_TEMP"/aos-sdk-*/sdk ]]
+          test "$(command -v adb)" = "$ANDROID_HOME/platform-tools/adb"
+          test "$(command -v sdkmanager)" = "$GITHUB_WORKSPACE/scripts/bin/sdkmanager"
+          test "$CMDLINE_TOOLS_VERSION" = 24.0
+          test "$(sdkmanager --version)" = "$CMDLINE_TOOLS_VERSION"
+          test ! -e "$ANDROID_HOME/platforms/android-37.0"
+          sdkmanager --install 'platforms;android-37.0' 'build-tools;36.0.0'
+          test -s "$ANDROID_HOME/platforms/android-37.0/android.jar"
+          test -x "$ANDROID_HOME/build-tools/36.0.0/aapt2"
+
+      - name: Check out the SDK sample apps
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: aosstudio/sdk
+          ref: fb3dde149b8c43eb1a81a1075ad92b5b353a3d4e
+          path: out/sdk-fixtures
+          persist-credentials: false
+
+      - name: Build and verify the Java and Kotlin apps
+        run: |
+          work=$(mktemp -d "$RUNNER_TEMP/aos-apps.XXXXXXXX")
+          agp="$work/aosstudio-agp-9.5.2-maven.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 \
+            --proto '=https' --proto-redir '=https' --output "$agp" \
+            https://github.com/aosstudio/agp/releases/download/latest/aosstudio-agp-9.5.2-maven.tar.gz
+          python ci/verify_apps.py --sdk-source out/sdk-fixtures \
+            --android-home "$ANDROID_HOME" --agp "$agp" --work "$work"

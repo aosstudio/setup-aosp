@@ -1,0 +1,25 @@
+name: Set up the AOSStudio SDK
+description: Download the AOSStudio SDK and install the requested packages
+inputs:
+  packages:
+    description: Space-separated SDK package IDs
+    default: platform-tools
+  cmdline-tools-version:
+    description: Command-Line Tools version from the SDK feed
+  accept-android-sdk-licenses:
+    description: Ignored compatibility input
+  log-accepted-android-sdk-licenses:
+    description: Ignored compatibility input
+outputs:
+  ANDROID_COMMANDLINE_TOOLS_VERSION:
+    description: The installed Command-Line Tools version
+    value: ${{ steps.setup.outputs.ANDROID_COMMANDLINE_TOOLS_VERSION }}
+runs:
+  using: composite
+  steps:
+    - id: setup
+      shell: bash
+      env:
+        AOS_SDK_PACKAGES: ${{ inputs.packages }}
+        AOS_SDK_CMDLINE_VERSION: ${{ inputs.cmdline-tools-version }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/ci_sdk.py" setup
