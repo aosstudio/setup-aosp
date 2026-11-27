@@ -1,8 +1,10 @@
+import hashlib
 import json
 from pathlib import Path
 import subprocess
 import tarfile
 from tempfile import TemporaryDirectory
+from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 NIGHTLY_ASSETS = {
@@ -17,6 +19,8 @@ INSTALLER_FILES = (
     "scripts/sdk_runtime.py",
     "locks/release.json",
 )
+NDK_VERSION = "28.2.13676358"
+NDK_PACKAGE = f"ndk;{NDK_VERSION}"
 
 
 def download(url: str, path: Path) -> None:
@@ -67,3 +71,59 @@ def prepare_inputs(directory: Path) -> None:
     with ZipFile(directory / "sdk/feed" / manager_asset) as archive:
         archive.extractall(directory / "bootstrap")
     (directory / "bootstrap/cmdline-tools/bin/sdkmanager").chmod(0o755)
+
+
+def prepare_ndk(feed: Path) -> None:
+    indexes = []
+    for path in sorted(feed.glob("repository2-*.xml")):
+        tree = ET.parse(path)
+        if tree.getroot().find(f"./remotePackage[@path='{NDK_PACKAGE}']") is None:
+            indexes.append((path, tree))
+    if not indexes:
+        return
+
+    filename = f"aosstudio-ndk-{NDK_VERSION}-linux-x86_64.zip"
+    archive = feed / filename
+    if not archive.is_file():
+        with TemporaryDirectory(dir=feed) as work:
+            candidate = Path(work) / filename
+            print(f"Downloading the AOSStudio NDK {NDK_VERSION} Nightly", flush=True)
+            download(
+                f"https://github.com/aosstudio/ndk/releases/download/latest/{filename}",
+                candidate,
+            )
+            with ZipFile(candidate) as package:
+                properties = package.read(f"ndk-{NDK_VERSION}/source.properties")
+            if f"Pkg.Revision = {NDK_VERSION}".encode() not in properties.splitlines():
+                raise ValueError(f"Unexpected NDK revision in {filename}")
+            candidate.replace(archive)
+    with archive.open("rb") as source:
+        checksum = hashlib.file_digest(source, "sha1").hexdigest()
+    xsi = "http://www.w3.org/2001/XMLSchema-instance"
+    ET.register_namespace("xsi", xsi)
+    for path, tree in indexes:
+        root = tree.getroot()
+        ET.register_namespace("s", root.tag.partition("}")[0][1:])
+        root.set("xmlns:g", "http://schemas.android.com/repository/android/generic/02")
+        package_info = ET.SubElement(root, "remotePackage", path=NDK_PACKAGE)
+        ET.SubElement(
+            package_info, "type-details", {f"{{{xsi}}}type": "g:genericDetailsType"}
+        )
+        revision = ET.SubElement(package_info, "revision")
+        for name, value in zip(
+            ("major", "minor", "micro"), NDK_VERSION.split("."), strict=True
+        ):
+            ET.SubElement(revision, name).text = value
+        ET.SubElement(
+            package_info, "display-name"
+        ).text = f"AOSStudio NDK {NDK_VERSION}"
+        choice = ET.SubElement(ET.SubElement(package_info, "archives"), "archive")
+        complete = ET.SubElement(choice, "complete")
+        ET.SubElement(complete, "size").text = str(archive.stat().st_size)
+        ET.SubElement(complete, "checksum", type="sha1").text = checksum
+        ET.SubElement(complete, "url").text = filename
+        ET.SubElement(choice, "host-os").text = "linux"
+        ET.SubElement(choice, "host-arch").text = "x64"
+        temporary = path.with_suffix(".xml.new")
+        tree.write(temporary, encoding="utf-8", xml_declaration=True)
+        temporary.replace(path)

@@ -12,6 +12,8 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-26.04
+    env:
+      NDK_VERSION: '28.2.13676358'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,9 +45,12 @@ jobs:
           test "$CMDLINE_TOOLS_VERSION" = 24.0
           test "$(sdkmanager --version)" = "$CMDLINE_TOOLS_VERSION"
           test ! -e "$ANDROID_HOME/platforms/android-37.0"
-          sdkmanager --install 'platforms;android-37.0' 'build-tools;36.0.0'
+          test ! -e "$ANDROID_HOME/ndk/$NDK_VERSION"
+          sdkmanager --install 'platforms;android-37.0' 'build-tools;36.0.0' "ndk;$NDK_VERSION"
           test -s "$ANDROID_HOME/platforms/android-37.0/android.jar"
           test -x "$ANDROID_HOME/build-tools/36.0.0/aapt2"
+          grep -Fx "Pkg.Revision = $NDK_VERSION" "$ANDROID_HOME/ndk/$NDK_VERSION/source.properties"
+          test -x "$ANDROID_HOME/ndk/$NDK_VERSION/ndk-build"
 
       - name: Check out the SDK sample apps
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,3 +69,19 @@ jobs:
             https://github.com/aosstudio/agp/releases/download/latest/aosstudio-agp-9.5.2-maven.tar.gz
           python ci/verify_apps.py --sdk-source out/sdk-fixtures \
             --android-home "$ANDROID_HOME" --agp "$agp" --work "$work"
+
+      - name: Set up the SDK and NDK with the checked-out action
+        uses: ./
+        with:
+          packages: 'platform-tools ndk;${{ env.NDK_VERSION }}'
+
+      - name: Compile and link with the NDK installed by the action
+        shell: bash
+        run: |
+          ndk="$ANDROID_HOME/ndk/$NDK_VERSION"
+          grep -Fx "Pkg.Revision = $NDK_VERSION" "$ndk/source.properties"
+          output=$(mktemp -d "$RUNNER_TEMP/aos-ndk.XXXXXXXX")
+          printf '%s\n' '#include <android/api-level.h>' 'int api_level(void) { return __ANDROID_API__; }' |
+            "$ndk/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang" \
+              -Werror -fPIC -shared -x c - -o "$output/probe.so"
+          test -s "$output/probe.so"
