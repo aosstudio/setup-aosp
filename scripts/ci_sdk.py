@@ -11,7 +11,7 @@ import tarfile
 from tempfile import mkdtemp
 from zipfile import BadZipFile
 
-from sdk_inputs import INSTALLER_SCRIPT, prepare_inputs
+from sdk_inputs import INSTALLER_SCRIPT, NDK_PACKAGE, prepare_inputs, prepare_ndk
 
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -30,13 +30,16 @@ def install_packages(
     add: bool = False,
 ) -> None:
     inputs = destination.parent / "inputs"
+    feed = inputs / "sdk/feed"
+    if NDK_PACKAGE in packages:
+        prepare_ndk(feed)
     arguments: list[str | Path] = [
         sys.executable,
         inputs / INSTALLER_SCRIPT,
         "--destination",
         destination,
         "--feed",
-        inputs / "sdk/feed",
+        feed,
         "--jdk",
         inputs / "jdk",
         "--manager",
